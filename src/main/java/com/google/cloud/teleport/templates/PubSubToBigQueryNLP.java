@@ -52,6 +52,7 @@ import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessageWithAttributesCoder;
 import org.apache.beam.sdk.options.*;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.values.*;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.mortbay.util.ajax.JSON;
 import org.slf4j.Logger;
@@ -444,23 +445,31 @@ public class PubSubToBigQueryNLP {
             PubsubMessage message = context.element();
             String currentPayload = new String(message.getPayload(), StandardCharsets.UTF_8);
             JSONObject json = new JSONObject(currentPayload);
-            String input = json.getString("text");
+            JSONArray segments = json.getJSONArray("segments");
+            JSONArray augSegments = new JSONArray();
 
             try (LanguageServiceClient language = LanguageServiceClient.create()) {
-                Document doc = Document.newBuilder().setContent(input).setType(Type.PLAIN_TEXT).build();
-                AnalyzeEntitySentimentRequest request =
-                        AnalyzeEntitySentimentRequest.newBuilder()
-                                .setDocument(doc)
-                                .setEncodingType(EncodingType.UTF16)
-                                .build();
-                AnalyzeEntitySentimentResponse response = language.analyzeEntitySentiment(request);
-                for (Entity x : response.getEntitiesList()) {
-                    JsonObject resultObj = new JsonObject();
-                    resultObj.put("name", x.getName());
-                    resultObj.put("type", x.getType().name());
-                    resultObj.put("sentiment", x.getSentiment().getScore());
-                    json.append("entities", resultObj);
+                for (int i = 0; i < segments.length(); i++) {
+                    JSONObject segment = segments.getJSONObject(i);
+                    String text = segment.getString("text");
+
+                    Document doc = Document.newBuilder().setContent(text).setLanguage("en").setType(Type.PLAIN_TEXT).build();
+                    AnalyzeEntitySentimentRequest request =
+                            AnalyzeEntitySentimentRequest.newBuilder()
+                                    .setDocument(doc)
+                                    .setEncodingType(EncodingType.UTF16)
+                                    .build();
+                    AnalyzeEntitySentimentResponse response = language.analyzeEntitySentiment(request);
+                    for (Entity x : response.getEntitiesList()) {
+                        JsonObject resultObj = new JsonObject();
+                        resultObj.put("name", x.getName());
+                        resultObj.put("type", x.getType().name());
+                        resultObj.put("sentiment", x.getSentiment().getScore());
+                        segment.append("entities", resultObj);
+                    }
+                    augSegments.put(segment);
                 }
+                json.put("segments", augSegments);
 
                 context.output(
                         FailsafeElement.of(message, json.toString()));
